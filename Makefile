@@ -12,6 +12,17 @@ system.mk: system_config.mk
 include ./system.mk
 
 #
+# PC
+#
+
+pc-emul: system.mk
+	make -C software/pc-emul run
+
+pc-clean:
+	make -C software/pc-emul clean
+
+
+#
 # SIMULATE
 #
 
@@ -206,22 +217,73 @@ test-all-boards:
 # COMPILE ASIC (WIP)
 #
 
-asic: bootloader
-	make -C $(ASIC_DIR)
+asic: asic-clean
+	make -C $(FIRM_DIR) run BAUD=$(HW_BAUD)
+	make -C $(BOOT_DIR) run BAUD=$(HW_BAUD)
+ifeq ($(shell hostname), $(ASIC_SERVER))
+	make -C $(ASIC_DIR) INIT_MEM=$(INIT_MEM) USE_DDR=$(USE_DDR) RUN_DDR=$(RUN_DDR) ASIC=1
+else
+	ssh $(ASIC_USER)@$(ASIC_SERVER) "if [ ! -d $(REMOTE_ROOT_DIR) ]; then mkdir -p $(REMOTE_ROOT_DIR); fi"
+	rsync -avz --exclude .git $(ROOT_DIR) $(ASIC_USER)@$(ASIC_SERVER):$(REMOTE_ROOT_DIR)
+	ssh -Y -C $(ASIC_USER)@$(ASIC_SERVER) 'cd $(REMOTE_ROOT_DIR); make -C $(ASIC_DIR) INIT_MEM=$(INIT_MEM) USE_DDR=$(USE_DDR) RUN_DDR=$(RUN_DDR) ASIC=1'
+	scp $(ASIC_USER)@$(ASIC_SERVER):$(REMOTE_ROOT_DIR)/$(ASIC_DIR)/synth/*.txt $(ASIC_DIR)/synth
+endif
 
-asic-clean:
+asic-mem:
+	make -C $(BOOT_DIR) run BAUD=$(HW_BAUD)
+ifeq ($(shell hostname), $(ASIC_SERVER))
+	make -C $(ASIC_DIR) mem INIT_MEM=$(INIT_MEM) USE_DDR=$(USE_DDR) RUN_DDR=$(RUN_DDR) ASIC=1
+else
+	ssh $(ASIC_USER)@$(ASIC_SERVER) "if [ ! -d $(REMOTE_ROOT_DIR) ]; then mkdir -p $(REMOTE_ROOT_DIR); fi"
+	rsync -avz --exclude .git $(ROOT_DIR) $(ASIC_USER)@$(ASIC_SERVER):$(REMOTE_ROOT_DIR)
+	ssh -Y -C $(ASIC_USER)@$(ASIC_SERVER) 'cd $(REMOTE_ROOT_DIR); make -C $(ASIC_DIR) mem INIT_MEM=$(INIT_MEM) USE_DDR=$(USE_DDR) RUN_DDR=$(RUN_DDR) ASIC=1'
+endif
+
+asic-synth:
+ifeq ($(shell hostname), $(ASIC_SERVER))
+	make -C $(ASIC_DIR) synth INIT_MEM=$(INIT_MEM) USE_DDR=$(USE_DDR) RUN_DDR=$(RUN_DDR) ASIC=1
+else
+	ssh $(ASIC_USER)@$(ASIC_SERVER) "if [ ! -d $(REMOTE_ROOT_DIR) ]; then mkdir -p $(REMOTE_ROOT_DIR); fi"
+	rsync -avz --exclude .git $(ROOT_DIR) $(ASIC_USER)@$(ASIC_SERVER):$(REMOTE_ROOT_DIR)
+	ssh -Y -C $(ASIC_USER)@$(ASIC_SERVER) 'cd $(REMOTE_ROOT_DIR); make -C $(ASIC_DIR) synth INIT_MEM=$(INIT_MEM) USE_DDR=$(USE_DDR) RUN_DDR=$(RUN_DDR) ASIC=1'
+	scp $(ASIC_USER)@$(ASIC_SERVER):$(REMOTE_ROOT_DIR)/$(ASIC_DIR)/synth/*.txt $(ASIC_DIR)/synth
+endif
+
+asic-sim-synth: sim-clean
+	make -C $(FIRM_DIR) run BAUD=$(SIM_BAUD)
+	make -C $(BOOT_DIR) run BAUD=$(SIM_BAUD)
+ifeq ($(shell hostname), $(ASIC_SERVER))
+	make -C $(HW_DIR)/simulation/ncsim run INIT_MEM=$(INIT_MEM) USE_DDR=$(USE_DDR) RUN_DDR=$(RUN_DDR) TEST_LOG=$(TEST_LOG) VCD=$(VCD) BAUD=$(SIM_BAUD) SYNTH=1
+else
+	ssh $(ASIC_USER)@$(ASIC_SERVER) "if [ ! -d $(REMOTE_ROOT_DIR) ]; then mkdir -p $(REMOTE_ROOT_DIR); fi"
+	rsync -avz --exclude .git $(ROOT_DIR) $(ASIC_USER)@$(ASIC_SERVER):$(REMOTE_ROOT_DIR)
+	ssh $(ASIC_USER)@$(ASIC_SERVER) 'cd $(REMOTE_ROOT_DIR); make -C $(HW_DIR)/simulation/ncsim run INIT_MEM=$(INIT_MEM) USE_DDR=$(USE_DDR) RUN_DDR=$(RUN_DDR) TEST_LOG=$(TEST_LOG) VCD=$(VCD) BAUD=$(SIM_BAUD) SYNTH=1'
+ifeq ($(TEST_LOG),1)
+	scp $(ASIC_USER)@$(ASIC_SERVER):$(REMOTE_ROOT_DIR)/$(HW_DIR)/simulation/ncsim/test.log $(HW_DIR)/simulation/ncsim
+endif
+ifeq ($(VCD),1)
+	scp $(ASIC_USER)@$(ASIC_SERVER):$(REMOTE_ROOT_DIR)/$(HW_DIR)/simulation/ncsim/*.vcd $(HW_DIR)/simulation/ncsim
+endif
+endif
+
+asic-clean: sw-clean
 	make -C $(ASIC_DIR) clean
+ifneq ($(shell hostname), $(ASIC_SERVER))
+	rsync -avz --exclude .git $(ROOT_DIR) $(ASIC_USER)@$(ASIC_SERVER):$(REMOTE_ROOT_DIR)
+	ssh $(ASIC_USER)@$(ASIC_SERVER) 'if [ -d $(REMOTE_ROOT_DIR) ]; then cd $(REMOTE_ROOT_DIR); make -C $(ASIC_DIR) clean; fi'
+endif
 
 
 # CLEAN ALL
-clean-all: sim-clean fpga-clean board-clean doc-clean
+clean-all: sim-clean fpga-clean asic-clean board-clean doc-clean
 
-.PHONY: sim sim-waves sim-clean \
-	fpga  fpga-clean fpga-clean-ip \
-	board-load board-run board-clean\
+.PHONY: pc-emul pc-clean \
+	sim sim-waves sim-clean \
+	fpga fpga-clean fpga-clean-ip \
+	board-load board-run board-clean \
 	firmware firmware-clean bootloader bootloader-clean sw-clean \
 	console console-clean \
-	doc doc-clean doc-pdfclean\
+	doc doc-clean doc-pdfclean \
 	test test-all-simulators test-simulator test-all-boards test-board test-board-config \
-	asic asic-clean \
+	asic asic-mem asic-synth asic-sim-synth asic-clean \
 	all clean-all
